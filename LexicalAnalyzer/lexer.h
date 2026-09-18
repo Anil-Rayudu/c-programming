@@ -1,8 +1,6 @@
 #ifndef LEXER_H
 #define LEXER_H
 
-hi
-
 #define MAX_KEYWORDS 20
 #define MAX_TOKEN_SIZE 100
 
