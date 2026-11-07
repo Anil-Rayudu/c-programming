@@ -16,7 +16,16 @@ int main(int argc, char *argv[])
     DecodeInfo decInfo;
     
     /* Checking operation type */
-    oper_type = check_operation_type(argv);
+    if(argc > 1) {
+        oper_type = check_operation_type(argv);
+    }
+    else {
+        printf("INFO: Please provide option : \n");
+        printf("./lsb_steg -e <source.bmp> <secret.txt> [output.bmp]\n");
+        printf("./lsb_steg -d <encoded.bmp>\n");
+        return 1;
+    }
+
 
     /* Encoding Part */
     if(oper_type == 0)
