@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+<title>sode2html</title>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body style="background-color:lightgrey;">
+<pre>
+<span class="preprocess_dir">
+#include </span><span class="header_file">&lt;stdio.h&gt;</span><span class="preprocess_dir">
+#include </span><span class="header_file">&lt;string.h&gt;</span><span class="preprocess_dir">
+#include </span><span class="header_file">&lt;ctype.h&gt;</span><span class="preprocess_dir">
+#include </span><span class="header_file">"s2html_event.h"</span>
+
+<span class="preprocess_dir">#define </span><span class="reserved_key2">SIZE_OF_SYMBOLS</span> (<span class="reserved_key1">sizeof</span>(<span class="reserved_key2">symbols</span>))<span class="preprocess_dir">
+#define </span><span class="reserved_key2">SIZE_OF_OPERATORS</span> (<span class="reserved_key1">sizeof</span>(<span class="reserved_key2">operators</span>))<span class="preprocess_dir">
+#define </span><span class="reserved_key2">WORD_BUFF_SIZE</span><span class="numeric_constant">	100</span>
+
+<span class="comment">/********** Internal states and event of parser **********/</span>
+<span class="reserved_key1">typedef</span> <span class="reserved_key1">enum</span>
+{
+	<span class="reserved_key2">PSTATE_IDLE,</span>
+	<span class="reserved_key2">PSTATE_PREPROCESSOR_DIRECTIVE,</span>
+	<span class="reserved_key2">PSTATE_SUB_PREPROCESSOR_MAIN,</span>
+	<span class="reserved_key2">PSTATE_SUB_PREPROCESSOR_RESERVE_KEYWORD,</span>
+	<span class="reserved_key2">PSTATE_SUB_PREPROCESSOR_ASCII_CHAR,</span>
+	<span class="reserved_key2">PSTATE_HEADER_FILE,</span>
+	<span class="reserved_key2">PSTATE_RESERVE_KEYWORD,</span>
+	<span class="reserved_key2">PSTATE_NUMERIC_CONSTANT,</span>
+	<span class="reserved_key2">PSTATE_STRING,</span>
+	<span class="reserved_key2">PSTATE_SINGLE_LINE_COMMENT,</span>
+	<span class="reserved_key2">PSTATE_MULTI_LINE_COMMENT,</span>
+	<span class="reserved_key2">PSTATE_ASCII_CHAR</span>
+}<span class="reserved_key2">pstate_e</span>;
+
+<span class="comment">/********** global variables **********/</span>
+
+<span class="comment">/* parser state variable */</span>
+<span class="reserved_key1">static</span> <span class="reserved_key2">pstate_e</span> <span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_IDLE</span>;
+
+<span class="comment">/* sub state is used only in preprocessor state */</span>
+<span class="reserved_key1">static</span> <span class="reserved_key2">pstate_e</span> <span class="reserved_key2">state_sub</span> = <span class="reserved_key2">PSTATE_SUB_PREPROCESSOR_MAIN</span>;
+
+<span class="comment">/* event variable to store event and related properties */</span>
+<span class="reserved_key1">static</span> <span class="reserved_key2">pevent_t</span> <span class="reserved_key2">pevent_data</span>;
+<span class="reserved_key1">static</span> <span class="reserved_key1">int</span> <span class="reserved_key2">event_data_idx=0</span>;
+
+<span class="reserved_key1">static</span> <span class="reserved_key1">char</span> <span class="reserved_key2">word[WORD_BUFF_SIZE]</span>;
+<span class="reserved_key1">static</span> <span class="reserved_key1">int</span> <span class="reserved_key2">word_idx=0</span>;
+
+
+<span class="reserved_key1">static</span> <span class="reserved_key1">char*</span> <span class="reserved_key2">res_kwords_data[]</span> = {<span class="string">"const"</span>, <span class="string">"volatile"</span>, <span class="string">"extern"</span>, <span class="string">"auto"</span>, <span class="string">"register"</span>,
+   						   <span class="string">"static"</span>, <span class="string">"signed"</span>, <span class="string">"unsigned"</span>, <span class="string">"short"</span>, <span class="string">"long"</span>, 
+						   <span class="string">"double"</span>, <span class="string">"char"</span>, <span class="string">"int"</span>, <span class="string">"float"</span>, <span class="string">"struct"</span>, 
+						   <span class="string">"union"</span>, <span class="string">"enum"</span>, <span class="string">"void"</span>, <span class="string">"typedef"</span>, <span class="string">""</span>
+						  };
+
+<span class="reserved_key1">static</span> <span class="reserved_key1">char*</span> <span class="reserved_key2">res_kwords_non_data[]</span> = {<span class="string">"goto"</span>, <span class="string">"return"</span>, <span class="string">"continue"</span>, <span class="string">"break"</span>, 
+							   <span class="string">"if"</span>, <span class="string">"else"</span>, <span class="string">"for"</span>, <span class="string">"while"</span>, <span class="string">"do"</span>, 
+							   <span class="string">"switch"</span>, <span class="string">"case"</span>, <span class="string">"default"</span>,<span class="string">"sizeof"</span>, <span class="string">""</span>
+							  };
+
+<span class="reserved_key1">static</span> <span class="reserved_key1">char</span> <span class="reserved_key2">operators[]</span> = {<span class="ascii_char">'/'</span>, <span class="ascii_char">'+'</span>, <span class="ascii_char">'*'</span>, <span class="ascii_char">'-'</span>, <span class="ascii_char">'%'</span>, <span class="ascii_char">'='</span>, <span class="ascii_char">'<'</span>, <span class="ascii_char">'>'</span>, <span class="ascii_char">'~'</span>, <span class="ascii_char">'&'</span>, <span class="ascii_char">','</span>, <span class="ascii_char">'!'</span>, <span class="ascii_char">'^'</span>, <span class="ascii_char">'|'</span>};
+<span class="reserved_key1">static</span> <span class="reserved_key1">char</span> <span class="reserved_key2">symbols[]</span> = {<span class="ascii_char">'('</span>, <span class="ascii_char">')'</span>, <span class="ascii_char">'{'</span>, <span class="ascii_char">'['</span>, <span class="ascii_char">':'</span>};
+
+<span class="comment">/********** state handlers **********/</span>
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_idle_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>);
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_single_line_comment_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>);
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_multi_line_comment_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>);
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_numeric_constant_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>);
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_string_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>);
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_header_file_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>);
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_ascii_char_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>);
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_reserve_keyword_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>);
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_preprocessor_directive_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>);
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_sub_preprocessor_main_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>);
+
+<span class="comment">/********** Utility functions **********/</span>
+
+<span class="comment">/* function to check if given word is reserved key word */</span>
+<span class="reserved_key1">static</span> <span class="reserved_key1">int</span> <span class="reserved_key2">is_reserved_keyword</span>(<span class="reserved_key1">char</span> *<span class="reserved_key2">word</span>)
+{
+	<span class="reserved_key1">int</span> <span class="reserved_key2">idx</span> =<span class="numeric_constant"> 0</span>;
+
+	<span class="comment">/* search for data type reserved keyword */</span>
+	<span class="reserved_key1">while</span>(*<span class="reserved_key2">res_kwords_data[idx]</span>)
+	{
+		<span class="reserved_key1">if</span>(<span class="reserved_key2">strcmp</span>(<span class="reserved_key2">res_kwords_data[idx++],</span> <span class="reserved_key2">word</span>) ==<span class="numeric_constant"> 0</span>)
+			<span class="reserved_key1">return</span> <span class="reserved_key2">RES_KEYWORD_DATA</span>;
+	}
+
+	<span class="reserved_key2">idx</span> =<span class="numeric_constant"> 0</span>; <span class="comment">// reset index
+</span>	<span class="comment">/* search for non data type reserved key word */</span>
+	<span class="reserved_key1">while</span>(*<span class="reserved_key2">res_kwords_non_data[idx]</span>)
+	{
+		<span class="reserved_key1">if</span>(<span class="reserved_key2">strcmp</span>(<span class="reserved_key2">res_kwords_non_data[idx++],</span> <span class="reserved_key2">word</span>) ==<span class="numeric_constant"> 0</span>)
+			<span class="reserved_key1">return</span> <span class="reserved_key2">RES_KEYWORD_NON_DATA</span>;
+	}
+
+	<span class="reserved_key1">return</span><span class="numeric_constant"> 0</span>; <span class="comment">// word did not match, return false
+</span>}
+
+<span class="comment">/* function to check symbols */</span>
+<span class="reserved_key1">static</span> <span class="reserved_key1">int</span> <span class="reserved_key2">is_symbol</span>(<span class="reserved_key1">char</span> <span class="reserved_key2">c</span>)
+{
+	<span class="reserved_key1">int</span> <span class="reserved_key2">idx</span>;
+	<span class="reserved_key1">for</span>(<span class="reserved_key2">idx</span> =<span class="numeric_constant"> 0</span>; <span class="reserved_key2">idx</span> < <span class="reserved_key2">SIZE_OF_SYMBOLS</span>; <span class="reserved_key2">idx++</span>)
+	{
+		<span class="reserved_key1">if</span>(<span class="reserved_key2">symbols[idx]</span> == <span class="reserved_key2">c</span>)
+			<span class="reserved_key1">return</span><span class="numeric_constant"> 1</span>;
+	}
+
+	<span class="reserved_key1">return</span><span class="numeric_constant"> 0</span>;
+}
+
+<span class="comment">/* function to check operator */</span>
+<span class="reserved_key1">static</span> <span class="reserved_key1">int</span> <span class="reserved_key2">is_operator</span>(<span class="reserved_key1">char</span> <span class="reserved_key2">c</span>)
+{
+	<span class="reserved_key1">int</span> <span class="reserved_key2">idx</span>;
+	<span class="reserved_key1">for</span>(<span class="reserved_key2">idx</span> =<span class="numeric_constant"> 0</span>; <span class="reserved_key2">idx</span> < <span class="reserved_key2">SIZE_OF_OPERATORS</span>; <span class="reserved_key2">idx++</span>)
+	{
+		<span class="reserved_key1">if</span>(<span class="reserved_key2">operators[idx]</span> == <span class="reserved_key2">c</span>)
+			<span class="reserved_key1">return</span><span class="numeric_constant"> 1</span>;
+	}
+
+	<span class="reserved_key1">return</span><span class="numeric_constant"> 0</span>;
+}
+
+<span class="comment">/* to set parser event */</span>
+<span class="reserved_key1">static</span> <span class="reserved_key1">void</span> <span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">pstate_e</span> <span class="reserved_key2">s,</span> <span class="reserved_key2">pevent_e</span> <span class="reserved_key2">e</span>)
+{
+	<span class="reserved_key2">pevent_data.data[event_data_idx]</span> =<span class="ascii_char">'\0'</span>;
+	<span class="reserved_key2">pevent_data.length</span> = <span class="reserved_key2">event_data_idx</span>;
+	<span class="reserved_key2">event_data_idx</span> =<span class="numeric_constant"> 0</span>;
+	<span class="reserved_key2">state</span> = <span class="reserved_key2">s</span>;
+	<span class="reserved_key2">pevent_data.type</span> = <span class="reserved_key2">e</span>;
+}
+
+
+<span class="comment">/************ Event functions **********/</span>
+
+<span class="comment">/* This function parses the source file and generate 
+ * event based on parsed characters and string
+ */</span>
+<span class="reserved_key2">pevent_t</span> *<span class="reserved_key2">get_parser_event</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd</span>)
+{
+	<span class="reserved_key1">int</span> <span class="reserved_key2">ch,</span> <span class="reserved_key2">pre_ch</span>;
+	<span class="reserved_key2">pevent_t</span> *<span class="reserved_key2">evptr</span> = <span class="reserved_key2">NULL</span>;
+	<span class="comment">/* Read char by char */</span>
+	<span class="reserved_key1">while</span>((<span class="reserved_key2">ch</span> = <span class="reserved_key2">fgetc</span>(<span class="reserved_key2">fd</span>)) != <span class="reserved_key2">EOF</span>)
+	{<span class="preprocess_dir">
+#ifdef </span><span class="reserved_key2">DEBUG</span>
+	<span class="comment">//	putchar(ch);
+</span><span class="preprocess_dir">#endif
+</span>		<span class="reserved_key1">switch</span>(<span class="reserved_key2">state</span>)
+		{
+			<span class="reserved_key1">case</span> <span class="reserved_key2">PSTATE_IDLE</span> :
+				<span class="reserved_key1">if</span>((<span class="reserved_key2">evptr</span> = <span class="reserved_key2">pstate_idle_handler</span>(<span class="reserved_key2">fd,</span> <span class="reserved_key2">ch</span>)) != <span class="reserved_key2">NULL</span>)
+					<span class="reserved_key1">return</span> <span class="reserved_key2">evptr</span>;
+				<span class="reserved_key1">break</span>;
+			<span class="reserved_key1">case</span> <span class="reserved_key2">PSTATE_SINGLE_LINE_COMMENT</span> :
+				<span class="reserved_key1">if</span>((<span class="reserved_key2">evptr</span> = <span class="reserved_key2">pstate_single_line_comment_handler</span>(<span class="reserved_key2">fd,</span> <span class="reserved_key2">ch</span>)) != <span class="reserved_key2">NULL</span>)
+					<span class="reserved_key1">return</span> <span class="reserved_key2">evptr</span>;
+				<span class="reserved_key1">break</span>;
+			<span class="reserved_key1">case</span> <span class="reserved_key2">PSTATE_MULTI_LINE_COMMENT</span> :
+				<span class="reserved_key1">if</span>((<span class="reserved_key2">evptr</span> = <span class="reserved_key2">pstate_multi_line_comment_handler</span>(<span class="reserved_key2">fd,</span> <span class="reserved_key2">ch</span>)) != <span class="reserved_key2">NULL</span>)
+					<span class="reserved_key1">return</span> <span class="reserved_key2">evptr</span>;
+				<span class="reserved_key1">break</span>;
+			<span class="reserved_key1">case</span> <span class="reserved_key2">PSTATE_PREPROCESSOR_DIRECTIVE</span> :
+				<span class="reserved_key1">if</span>((<span class="reserved_key2">evptr</span> = <span class="reserved_key2">pstate_preprocessor_directive_handler</span>(<span class="reserved_key2">fd,</span> <span class="reserved_key2">ch</span>)) != <span class="reserved_key2">NULL</span>)
+					<span class="reserved_key1">return</span> <span class="reserved_key2">evptr</span>;
+				<span class="reserved_key1">break</span>;
+			<span class="reserved_key1">case</span> <span class="reserved_key2">PSTATE_RESERVE_KEYWORD</span> :
+				<span class="reserved_key1">if</span>((<span class="reserved_key2">evptr</span> = <span class="reserved_key2">pstate_reserve_keyword_handler</span>(<span class="reserved_key2">fd,</span> <span class="reserved_key2">ch</span>)) != <span class="reserved_key2">NULL</span>)
+					<span class="reserved_key1">return</span> <span class="reserved_key2">evptr</span>;
+				<span class="reserved_key1">break</span>;
+			<span class="reserved_key1">case</span> <span class="reserved_key2">PSTATE_NUMERIC_CONSTANT</span> :
+				<span class="reserved_key1">if</span>((<span class="reserved_key2">evptr</span> = <span class="reserved_key2">pstate_numeric_constant_handler</span>(<span class="reserved_key2">fd,</span> <span class="reserved_key2">ch</span>)) != <span class="reserved_key2">NULL</span>)
+					<span class="reserved_key1">return</span> <span class="reserved_key2">evptr</span>;
+				<span class="reserved_key1">break</span>;
+			<span class="reserved_key1">case</span> <span class="reserved_key2">PSTATE_STRING</span> :
+				<span class="reserved_key1">if</span>((<span class="reserved_key2">evptr</span> = <span class="reserved_key2">pstate_string_handler</span>(<span class="reserved_key2">fd,</span> <span class="reserved_key2">ch</span>)) != <span class="reserved_key2">NULL</span>)
+					<span class="reserved_key1">return</span> <span class="reserved_key2">evptr</span>;
+				<span class="reserved_key1">break</span>;
+			<span class="reserved_key1">case</span> <span class="reserved_key2">PSTATE_HEADER_FILE</span> :
+				<span class="reserved_key1">if</span>((<span class="reserved_key2">evptr</span> = <span class="reserved_key2">pstate_header_file_handler</span>(<span class="reserved_key2">fd,</span> <span class="reserved_key2">ch</span>)) != <span class="reserved_key2">NULL</span>)
+					<span class="reserved_key1">return</span> <span class="reserved_key2">evptr</span>;
+				<span class="reserved_key1">break</span>;
+			<span class="reserved_key1">case</span> <span class="reserved_key2">PSTATE_ASCII_CHAR</span> :
+				<span class="reserved_key1">if</span>((<span class="reserved_key2">evptr</span> = <span class="reserved_key2">pstate_ascii_char_handler</span>(<span class="reserved_key2">fd,</span> <span class="reserved_key2">ch</span>)) != <span class="reserved_key2">NULL</span>)
+					<span class="reserved_key1">return</span> <span class="reserved_key2">evptr</span>;
+				<span class="reserved_key1">break</span>;
+			<span class="reserved_key1">default</span> : 
+				<span class="reserved_key2">printf</span>(<span class="string">"unknown state\n"</span>);
+				<span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_IDLE</span>;
+				<span class="reserved_key1">break</span>;
+		}
+	}
+
+	<span class="comment">/* end of file is reached, move back to idle state and set EOF event */</span>
+	<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_EOF</span>);
+
+	<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>; <span class="comment">// return final event
+</span>}
+
+
+<span class="comment">/********** IDLE state Handler **********
+ * Idle state handler identifies
+ ****************************************/</span>
+
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_idle_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>)
+{
+	<span class="reserved_key1">int</span> <span class="reserved_key2">pre_ch</span>;
+	<span class="reserved_key1">switch</span>(<span class="reserved_key2">ch</span>)
+	{
+		<span class="reserved_key1">case</span><span class="ascii_char">'\''</span> : <span class="comment">// begining of ASCII char
+</span>			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">ungetc</span>(<span class="reserved_key2">ch,</span> <span class="reserved_key2">fd</span>);
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_NULL</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_ASCII_CHAR</span>;
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+
+		<span class="reserved_key1">case</span><span class="ascii_char">'/'</span> :
+			<span class="reserved_key2">pre_ch</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">if</span>((<span class="reserved_key2">ch</span> = <span class="reserved_key2">fgetc</span>(<span class="reserved_key2">fd</span>)) == <span class="ascii_char">'*'</span>) <span class="comment">// multi line comment
+</span>			{
+				<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) <span class="comment">// we have regular exp in buffer first process that
+</span>				{
+					<span class="reserved_key2">fseek</span>(<span class="reserved_key2">fd,</span> -<span class="numeric_constant">2L</span>, <span class="reserved_key2">SEEK_CUR</span>); <span class="comment">// unget chars
+</span>					<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_REGULAR_EXP</span>);
+					<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+				}
+				<span class="reserved_key1">else</span> <span class="comment">//	multi line comment begin 
+</span>				{
+<span class="preprocess_dir">#ifdef </span><span class="reserved_key2">DEBUG</span>	
+					<span class="reserved_key2">printf</span>(<span class="string">"Multi line comment Begin : /*\n"</span>);<span class="preprocess_dir">
+#endif
+</span>					<span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_MULTI_LINE_COMMENT</span>;
+					<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">pre_ch</span>;
+					<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+				}
+			}
+			<span class="reserved_key1">else</span> <span class="reserved_key1">if</span>(<span class="reserved_key2">ch</span> == <span class="ascii_char">'/'</span>) <span class="comment">// single line comment
+</span>			{
+				<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) <span class="comment">// we have regular exp in buffer first process that
+</span>				{
+					<span class="reserved_key2">fseek</span>(<span class="reserved_key2">fd,</span> -<span class="numeric_constant">2L</span>, <span class="reserved_key2">SEEK_CUR</span>); <span class="comment">// unget chars
+</span>					<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_REGULAR_EXP</span>);
+					<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+				}
+				<span class="reserved_key1">else</span> <span class="comment">//	single line comment begin
+</span>				{
+<span class="preprocess_dir">#ifdef </span><span class="reserved_key2">DEBUG</span>	
+					<span class="reserved_key2">printf</span>(<span class="string">"Single line comment Begin : //\n"</span>);<span class="preprocess_dir">
+#endif
+</span>					<span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_SINGLE_LINE_COMMENT</span>;
+					<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">pre_ch</span>;
+					<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+				}
+			}
+			<span class="reserved_key1">else</span> <span class="comment">// it is regular exp
+</span>			{
+				<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">pre_ch</span>;
+				<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			}
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">case</span><span class="ascii_char">'#'</span> : <span class="comment">// preprocessor directive
+</span>			<span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_PREPROCESSOR_DIRECTIVE</span>;
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">case</span><span class="ascii_char">'"'</span> : <span class="comment">// beginning of string
+</span>			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_REGULAR_EXP</span>);
+				<span class="reserved_key2">ungetc</span>(<span class="reserved_key2">ch,</span> <span class="reserved_key2">fd</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_STRING</span>;
+			<span class="reserved_key1">break</span>;
+		
+		<span class="reserved_key1">case</span><span class="ascii_char">'0'</span> ...<span class="ascii_char">'9'</span> : <span class="comment">// detect numeric constant
+</span>			<span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_NUMERIC_CONSTANT</span>;
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+		
+		<span class="reserved_key1">case</span><span class="ascii_char">'A'</span> ...<span class="ascii_char">'Z'</span> :
+		<span class="reserved_key1">case</span><span class="ascii_char">'a'</span> ...<span class="ascii_char">'z'</span> : <span class="comment">// could be reserved key word
+</span>			<span class="reserved_key1">if</span>(<span class="reserved_key2">ch!=EOF</span>) <span class="reserved_key2">ungetc</span>(<span class="reserved_key2">ch,</span> <span class="reserved_key2">fd</span>);
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_RESERVE_KEYWORD,</span> <span class="reserved_key2">PEVENT_REGULAR_EXP</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key1">else</span> {
+				<span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_RESERVE_KEYWORD</span>;
+			}
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">default</span> : <span class="comment">// Assuming common text starts by default.
+</span>			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_REGULAR_EXP</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+	}
+
+	<span class="reserved_key1">return</span> <span class="reserved_key2">NULL</span>;
+}
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_preprocessor_directive_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>)
+{
+	<span class="reserved_key1">switch</span>(<span class="reserved_key2">state_sub</span>)
+	{
+		<span class="reserved_key1">case</span> <span class="reserved_key2">PSTATE_SUB_PREPROCESSOR_MAIN</span> :
+			<span class="reserved_key1">return</span> <span class="reserved_key2">pstate_sub_preprocessor_main_handler</span>(<span class="reserved_key2">fd,</span> <span class="reserved_key2">ch</span>);
+		<span class="reserved_key1">case</span> <span class="reserved_key2">PSTATE_SUB_PREPROCESSOR_RESERVE_KEYWORD</span> :
+			<span class="reserved_key1">return</span> <span class="reserved_key2">pstate_reserve_keyword_handler</span>(<span class="reserved_key2">fd,</span> <span class="reserved_key2">ch</span>);
+		<span class="reserved_key1">case</span> <span class="reserved_key2">PSTATE_SUB_PREPROCESSOR_ASCII_CHAR</span> :
+			<span class="reserved_key1">return</span> <span class="reserved_key2">pstate_ascii_char_handler</span>(<span class="reserved_key2">fd,</span> <span class="reserved_key2">ch</span>);
+		<span class="reserved_key1">default</span> :
+				<span class="reserved_key2">printf</span>(<span class="string">"unknown state\n"</span>);
+				<span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_IDLE</span>;
+	}
+
+	<span class="reserved_key1">return</span> <span class="reserved_key2">NULL</span>;
+}
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_sub_preprocessor_main_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>)
+{
+	<span class="comment">/* write a switch case here to detect several events here
+	 * This state is similar to Idle state with slight difference
+	 * in state transition.
+	 * return event data at the end of event
+	 * else return NULL
+	 */</span>
+
+	<span class="reserved_key1">switch</span>(<span class="reserved_key2">ch</span>) {
+		<span class="reserved_key1">case</span><span class="ascii_char">'<'</span>:
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">ungetc</span>(<span class="reserved_key2">ch,</span> <span class="reserved_key2">fd</span>);
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_PREPROCESSOR_DIRECTIVE,</span> <span class="reserved_key2">PEVENT_PREPROCESSOR_DIRECTIVE</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_HEADER_FILE</span>;
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">case</span><span class="ascii_char">'"'</span>:
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">ungetc</span>(<span class="reserved_key2">ch,</span> <span class="reserved_key2">fd</span>);
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_PREPROCESSOR_DIRECTIVE,</span> <span class="reserved_key2">PEVENT_PREPROCESSOR_DIRECTIVE</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key2">ungetc</span>(<span class="reserved_key2">ch,</span> <span class="reserved_key2">fd</span>);
+			<span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_HEADER_FILE</span>;
+			<span class="reserved_key1">break</span>;
+
+		<span class="reserved_key1">case</span><span class="ascii_char">' '</span>:
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_PREPROCESSOR_DIRECTIVE,</span> <span class="reserved_key2">PEVENT_PREPROCESSOR_DIRECTIVE</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key2">state_sub</span> = <span class="reserved_key2">PSTATE_SUB_PREPROCESSOR_RESERVE_KEYWORD</span>;
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">case</span><span class="ascii_char">'A'</span> ...<span class="ascii_char">'Z'</span> :
+			<span class="reserved_key2">ungetc</span>(<span class="reserved_key2">ch,</span> <span class="reserved_key2">fd</span>);
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_PREPROCESSOR_DIRECTIVE</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key2">state</span> = <span class="reserved_key2">PSTATE_IDLE</span>;
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">case</span><span class="ascii_char">'\n'</span>:
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_PREPROCESSOR_DIRECTIVE</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">default</span>:
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+	}
+	<span class="reserved_key1">return</span> <span class="reserved_key2">NULL</span>;
+}
+
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_header_file_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>)
+{
+	<span class="comment">/* write a switch case here to store header file name
+	 * return event data at the end of event
+	 * else return NULL
+	 */</span>
+	<span class="reserved_key1">switch</span>(<span class="reserved_key2">ch</span>) {
+		<span class="reserved_key1">case</span><span class="ascii_char">'>'</span>:
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">pevent_data.property</span> = <span class="reserved_key2">STD_HEADER_FILE</span>;
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_HEADER_FILE</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">case</span><span class="ascii_char">'\"'</span>:
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+				<span class="reserved_key2">pevent_data.property</span> = <span class="reserved_key2">USER_HEADER_FILE</span>;
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_HEADER_FILE</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">case</span><span class="ascii_char">'\n'</span>:
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_RESERVE_KEYWORD</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+		
+		<span class="reserved_key1">default</span>:
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+	}
+	<span class="reserved_key1">return</span> <span class="reserved_key2">NULL</span>;
+}
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_reserve_keyword_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>)
+{
+	<span class="comment">/* write a switch case here to store words
+	 * return event data at the end of event
+	 * else return NULL
+	 */</span>
+	
+	<span class="reserved_key1">switch</span>(<span class="reserved_key2">ch</span>) {
+		<span class="reserved_key1">case</span><span class="ascii_char">'a'</span> ...<span class="ascii_char">'z'</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">'_'</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">'A'</span> ...<span class="ascii_char">'Z'</span>:
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key2">word[word_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">case</span><span class="ascii_char">' '</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">'('</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">')'</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">'\n'</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">'\t'</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">';'</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">':'</span>:
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">ch</span> != <span class="reserved_key2">EOF</span>) <span class="reserved_key2">ungetc</span>(<span class="reserved_key2">ch,</span> <span class="reserved_key2">fd</span>);
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">word[word_idx]</span> =<span class="ascii_char">'\0'</span>;
+				<span class="reserved_key2">word_idx</span> =<span class="numeric_constant"> 0</span>;
+				<span class="reserved_key1">if</span>(<span class="reserved_key2">is_reserved_keyword</span>(<span class="reserved_key2">word</span>)) {
+					<span class="reserved_key2">pevent_data.property</span> = <span class="reserved_key2">RES_KEYWORD_DATA</span>;
+					<span class="reserved_key1">if</span>(<span class="reserved_key2">state_sub</span> == <span class="reserved_key2">PSTATE_SUB_PREPROCESSOR_RESERVE_KEYWORD</span>) {
+						<span class="reserved_key2">state_sub</span> = <span class="reserved_key2">PSTATE_SUB_PREPROCESSOR_MAIN</span>;
+						<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_PREPROCESSOR_DIRECTIVE,</span> <span class="reserved_key2">PEVENT_RESERVE_KEYWORD</span>);
+						<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+					}
+					<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_RESERVE_KEYWORD</span>);
+					<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+				}
+
+				<span class="reserved_key2">pevent_data.property</span> = <span class="reserved_key2">RES_KEYWORD_NON_DATA</span>;
+				<span class="reserved_key1">if</span>(<span class="reserved_key2">state_sub</span> == <span class="reserved_key2">PSTATE_SUB_PREPROCESSOR_RESERVE_KEYWORD</span>) {
+					<span class="reserved_key2">state_sub</span> = <span class="reserved_key2">PSTATE_SUB_PREPROCESSOR_MAIN</span>;
+					<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_PREPROCESSOR_DIRECTIVE,</span> <span class="reserved_key2">PEVENT_RESERVE_KEYWORD</span>);
+					<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+				}
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_RESERVE_KEYWORD</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">default</span>:
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+	}	
+	<span class="reserved_key1">return</span> <span class="reserved_key2">NULL</span>;
+}
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_numeric_constant_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>)
+{
+	<span class="comment">/* write a switch case here to store digits
+	 * return event data at the end of event
+	 * else return NULL
+	 */</span>
+	<span class="reserved_key1">switch</span> (<span class="reserved_key2">ch</span>) {
+		<span class="reserved_key1">case</span><span class="ascii_char">'.'</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">'0'</span> ...<span class="ascii_char">'9'</span>:
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">case</span><span class="ascii_char">' '</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">';'</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">')'</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">'}'</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">']'</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">','</span>:
+		<span class="reserved_key1">case</span><span class="ascii_char">'\n'</span>:
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">ungetc</span>(<span class="reserved_key2">ch,</span> <span class="reserved_key2">fd</span>);
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_NUMERIC_CONSTANT</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">default</span>:
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+	}
+	<span class="reserved_key1">return</span> <span class="reserved_key2">NULL</span>;
+}
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_string_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>)
+{
+	<span class="comment">/* write a switch case here to store string
+	 * return event data at the end of event
+	 * else return NULL
+	 */</span>
+
+	<span class="reserved_key1">switch</span>(<span class="reserved_key2">ch</span>) {
+		<span class="reserved_key1">case</span><span class="ascii_char">'\"'</span>:
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_STRING</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">default</span>:
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+	}
+	<span class="reserved_key1">return</span> <span class="reserved_key2">NULL</span>;
+}
+
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_single_line_comment_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>)
+{
+	<span class="reserved_key1">int</span> <span class="reserved_key2">pre_ch</span>;
+	<span class="reserved_key1">switch</span>(<span class="reserved_key2">ch</span>)
+	{
+		<span class="reserved_key1">case</span><span class="ascii_char">'\n'</span> : <span class="comment">/* single line comment ends here */</span><span class="preprocess_dir">
+#ifdef </span><span class="reserved_key2">DEBUG</span>	
+			<span class="reserved_key2">printf</span>(<span class="string">"\nSingle line comment end\n"</span>);<span class="preprocess_dir">
+#endif
+</span>			<span class="reserved_key2">pre_ch</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_SINGLE_LINE_COMMENT</span>);
+			<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+		<span class="reserved_key1">default</span> :  <span class="comment">// collect single line comment chars
+</span>			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+	}
+
+	<span class="reserved_key1">return</span> <span class="reserved_key2">NULL</span>;
+}
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_multi_line_comment_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>)
+{
+	<span class="reserved_key1">int</span> <span class="reserved_key2">pre_ch</span>;
+	<span class="reserved_key1">switch</span>(<span class="reserved_key2">ch</span>)
+	{
+		<span class="reserved_key1">case</span><span class="ascii_char">'*'</span> : <span class="comment">/* comment might end here */</span>
+			<span class="reserved_key2">pre_ch</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">if</span>((<span class="reserved_key2">ch</span> = <span class="reserved_key2">fgetc</span>(<span class="reserved_key2">fd</span>)) == <span class="ascii_char">'/'</span>)
+			{<span class="preprocess_dir">
+#ifdef </span><span class="reserved_key2">DEBUG</span>	
+				<span class="reserved_key2">printf</span>(<span class="string">"\nMulti line comment End : */\n"</span>);<span class="preprocess_dir">
+#endif
+</span>				<span class="reserved_key2">pre_ch</span> = <span class="reserved_key2">ch</span>;
+				<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_MULTI_LINE_COMMENT</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key1">else</span> <span class="comment">// multi line comment string still continued
+</span>			{
+				<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			}
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">case</span><span class="ascii_char">'/'</span> :
+			<span class="comment">/* go back by two steps and read previous char */</span>
+			<span class="reserved_key2">fseek</span>(<span class="reserved_key2">fd,</span> -<span class="numeric_constant">2L</span>, <span class="reserved_key2">SEEK_CUR</span>); <span class="comment">// move two steps back
+</span>			<span class="reserved_key2">pre_ch</span> = <span class="reserved_key2">fgetc</span>(<span class="reserved_key2">fd</span>); <span class="comment">// read a char
+</span>			<span class="reserved_key2">fgetc</span>(<span class="reserved_key2">fd</span>); <span class="comment">// to come back to current offset
+</span>
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">pre_ch</span> == <span class="ascii_char">'*'</span>)
+			{
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_MULTI_LINE_COMMENT</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">default</span> :  <span class="comment">// collect multi-line comment chars
+</span>			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+	}
+
+	<span class="reserved_key1">return</span> <span class="reserved_key2">NULL</span>;
+}
+<span class="reserved_key2">pevent_t</span> * <span class="reserved_key2">pstate_ascii_char_handler</span>(<span class="reserved_key2">FILE</span> *<span class="reserved_key2">fd,</span> <span class="reserved_key1">int</span> <span class="reserved_key2">ch</span>)
+{
+	<span class="comment">/* write a switch case here to store ASCII chars
+	 * return event data at the end of event
+	 * else return NULL
+	 */</span>
+	
+	<span class="reserved_key1">int</span> <span class="reserved_key2">pre_ch</span>;
+	<span class="reserved_key1">switch</span> (<span class="reserved_key2">ch</span>)
+	{
+		<span class="reserved_key1">case</span><span class="ascii_char">'\\'</span>:
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key2">ch</span> = <span class="reserved_key2">fgetc</span>(<span class="reserved_key2">fd</span>);
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+		<span class="reserved_key1">case</span><span class="ascii_char">'\''</span>:
+			<span class="reserved_key1">if</span>(<span class="reserved_key2">event_data_idx</span>) {
+				<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+				<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_ASCII_CHAR</span>);
+				<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			}
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key2">set_parser_event</span>(<span class="reserved_key2">PSTATE_IDLE,</span> <span class="reserved_key2">PEVENT_ASCII_CHAR</span>);
+			<span class="reserved_key1">return</span> &<span class="reserved_key2">pevent_data</span>;
+			<span class="reserved_key1">break</span>;
+		
+		<span class="reserved_key1">default</span>:
+			<span class="reserved_key2">pevent_data.data[event_data_idx++]</span> = <span class="reserved_key2">ch</span>;
+			<span class="reserved_key1">break</span>;
+	}
+	<span class="reserved_key1">return</span> <span class="reserved_key2">NULL</span>;
+}
+<span class="comment">/**** End of file ****/</span>
+</pre>
+</body>
+</html>
